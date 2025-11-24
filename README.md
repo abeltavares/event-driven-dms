@@ -1106,8 +1106,7 @@ grpcurl -plaintext localhost:50051 list
 
 ## 📄 License
 
-MIT License - feel free to use this project for learning and production deployments.
-
+This project is licensed under the [MIT License](LICENSE).
 ---
 
 ## 🤝 Contributing
