@@ -37,17 +37,9 @@ Perfect for learning async Python patterns, event-driven systems, and microservi
 
 ### High-Level Flow
 
-```
-Client → Kong Gateway → Service (FastAPI) → PostgreSQL
-                                          ↓ WAL
-                                    Debezium (CDC)
-                                          ↓
-                                      Kafka
-                                     ↙      ↘
-                          Event Processor   WebSocket
-                                ↓              ↓
-                          Elasticsearch   Real-time Updates
-```
+<p align="center">
+  <img src="img/architecture.png" alt="Architecture Diagram" width="700"/>
+</p>
 
 ### Detailed Architecture Diagram
 
@@ -60,7 +52,7 @@ graph TB
     end
 
     subgraph "API Gateway Layer"
-        Kong["🦍 Kong Gateway<br/>Port 8000 (Proxy)<br/>Port 8001 (Admin)<br/>━━━━━━━━━━<br/>• Request Routing<br/>• CORS Handling<br/>• Load Balancing"]
+        Kong["🦍 Kong Gateway<br/>Port 8000 (Proxy)<br/>Port 8001 (Admin)<br/>━━━━━━━━━━<br/>• Request Routing<br/>• CORS Handling<br/>• Load Balancing<br/>• WebSocket Proxy"]
     end
 
     subgraph "Microservices Layer"
@@ -92,23 +84,29 @@ graph TB
     end
 
     subgraph "Event Processing Layer"
-        EventProc["⚙️ Event Processor<br/>Quix Streams<br/>━━━━━━━━━━<br/>Async Kafka Consumer<br/>• Transform CDC events<br/>• Filter incomplete data<br/>• Batch to Elasticsearch<br/>• Idempotent indexing"]
+        EventProc["⚙️ Event Processor<br/>Quix Streams<br/>━━━━━━━━━━<br/>Background Worker<br/>• Transform CDC events<br/>• Filter incomplete data<br/>• Batch to Elasticsearch<br/>• Idempotent indexing"]
     end
 
     subgraph "Search Engine"
         ES[("🔍 Elasticsearch 8<br/>Port 9200<br/>━━━━━━━━━━<br/>Full-text Search<br/>Index: documents<br/>• Title (analyzed)<br/>• Status (keyword)<br/>• Aggregations")]
     end
 
-    %% Client to Gateway
-    Browser --> Kong
-    Mobile --> Kong
-    CLI --> Kong
+    %% Client to Gateway (HTTP)
+    Browser -->|"HTTP Requests"| Kong
+    Mobile -->|"HTTP Requests"| Kong
+    CLI -->|"HTTP Requests"| Kong
 
-    %% Gateway to Services
+    %% Client to Gateway (WebSocket - Bidirectional)
+    Browser <-->|"WebSocket<br/>(persistent)"| Kong
+    Mobile <-->|"WebSocket<br/>(persistent)"| Kong
+
+    %% Gateway to Services (HTTP)
     Kong -->|"POST /documents<br/>GET /documents"| DocSvc
     Kong -->|"POST /signatures"| SigSvc
     Kong -->|"GET /search?q=..."| SearchSvc
-    Kong -->|"WS /ws/{doc_id}"| WSSvc
+    
+    %% Gateway to WebSocket Service (Bidirectional)
+    Kong <-->|"WS /ws/{doc_id}<br/>(bidirectional)"| WSSvc
 
     %% Services to Connection Pool
     DocSvc -->|"SQL Queries<br/>(asyncpg)"| PgBouncer
@@ -119,7 +117,6 @@ graph TB
 
     %% Services to Cache/Analytics
     DocSvc -->|"Cache + Analytics<br/>(aioredis)"| Redis
-    SigSvc -->|"Cache<br/>(aioredis)"| Redis
 
     %% Services to Storage
     DocSvc -->|"PUT/GET<br/>(aioboto3)"| MinIO
@@ -142,10 +139,6 @@ graph TB
     %% Search Service to Elasticsearch
     SearchSvc -->|"Search Queries<br/>(async)"| ES
 
-    %% WebSocket to Clients
-    WSSvc -.->|"Real-time Events<br/>(WebSocket)"| Browser
-    WSSvc -.->|"Real-time Events<br/>(WebSocket)"| Mobile
-
     %% Styling
     classDef clientStyle fill:#e1f5ff,stroke:#01579b,stroke-width:2px
     classDef gatewayStyle fill:#fff3e0,stroke:#e65100,stroke-width:3px
@@ -160,7 +153,6 @@ graph TB
     class PG,Redis,MinIO,PgBouncer dataStyle
     class Debezium,Kafka,EventProc cdcStyle
     class ES searchStyle
-
 ```
 
 **Service Mesh:**
@@ -199,6 +191,8 @@ docs-dms/
 ├── docker-compose.yml                 # Orchestrates all services
 ├── requirements.txt                   # Python dependencies (shared tools, scripts)
 ├── locustfile.py                      # Load testing scenarios
+├── img/
+│   └── architecture.png               # Architecture diagram
 ├── protos/
 │   └── document_service.proto         # gRPC service definition
 ├── scripts/
@@ -207,43 +201,60 @@ docs-dms/
 │   └── setup-debezium.sh              # Configure CDC connector
 ├── kong-config/
 │   ├── Dockerfile                     # Kong configuration builder
-│   └── configure.py                   # Auto-configure routes/plugins
+│   ├── configure.py                   # Auto-configure routes/plugins
+│   └── requirements.txt               # Kong config dependencies
 ├── debezium/
 │   └── register-postgres.json         # CDC connector configuration
 └── services/
-    ├── document/                      # Document management service
-    │   ├── app/
-    │   │   ├── main.py                # FastAPI HTTP endpoints
-    │   │   ├── grpc_server.py         # gRPC server (port 50051)
-    │   │   ├── grpc_servicer.py       # gRPC method implementations
-    │   │   ├── database.py            # AsyncPG connection pool
-    │   │   ├── storage.py             # MinIO async client
-    │   │   ├── cache.py               # Redis async client
-    │   │   ├── analytics.py           # Document analytics (Redis)
-    │   │   └── models.py              # SQLAlchemy async models
-    │   └── requirements.txt
-    ├── signature/                     # E-signature service
-    │   ├── app/
-    │   │   ├── main.py                # FastAPI endpoints
-    │   │   ├── grpc_client.py         # gRPC client for document service
-    │   │   └── storage.py             # Signature image storage
-    │   └── requirements.txt
-    ├── search/                        # Search API service
-    │   ├── app/
-    │   │   └── main.py                # Elasticsearch queries
-    │   └── requirements.txt
-    ├── websocket/                     # Real-time service
-    │   ├── app/
-    │   │   ├── main.py                # WebSocket server
-    │   │   ├── auth.py                # JWT authentication
-    │   │   ├── connection_manager.py  # Connection pooling
-    │   │   └── kafka_consumer.py      # CDC event listener
-    │   └── requirements.txt
-    └── event/                         # CDC event processor
-        ├── app/
-        │   ├── main.py                # Quix Streams consumer
-        │   └── idempotency.py         # Deduplication logic
-        └── requirements.txt
+  ├── document/                      # Document management service
+  │   ├── Dockerfile
+  │   ├── app/
+  │   │   ├── __init__.py
+  │   │   ├── analytics.py           # Document analytics (Redis)
+  │   │   ├── cache.py               # Redis async client
+  │   │   ├── config.py
+  │   │   ├── database.py            # AsyncPG connection pool
+  │   │   ├── grpc_server.py         # gRPC server (port 50051)
+  │   │   ├── grpc_servicer.py       # gRPC method implementations
+  │   │   ├── main.py                # FastAPI HTTP endpoints
+  │   │   ├── models.py              # SQLAlchemy async models
+  │   │   ├── schemas.py
+  │   │   └── storage.py             # MinIO async client
+  │   └── requirements.txt
+  ├── event/                         # CDC event processor
+  │   ├── Dockerfile
+  │   ├── app/
+  │   │   ├── config.py
+  │   │   ├── main.py                # Quix Streams consumer
+  │   └── requirements.txt
+  │   └── state/
+  ├── search/                        # Search API service
+  │   ├── Dockerfile
+  │   ├── app/
+  │   │   ├── config.py
+  │   │   └── main.py                # Elasticsearch queries
+  │   └── requirements.txt
+  ├── signature/                     # E-signature service
+  │   ├── Dockerfile
+  │   ├── app/
+  │   │   ├── __init__.py
+  │   │   ├── config.py
+  │   │   ├── database.py
+  │   │   ├── grpc_client.py         # gRPC client for document service
+  │   │   ├── main.py                # FastAPI endpoints
+  │   │   ├── models.py
+  │   │   ├── schemas.py
+  │   │   └── storage.py             # Signature image storage
+  │   └── requirements.txt
+  └── websocket/                     # Real-time service
+    ├── Dockerfile
+    ├── app/
+    │   ├── auth.py                # JWT authentication
+    │   ├── config.py
+    │   ├── connection_manager.py  # Connection pooling
+    │   ├── kafka_consumer.py      # CDC event listener
+    │   └── main.py                # WebSocket server
+    └── requirements.txt
 ```
 
 ---
